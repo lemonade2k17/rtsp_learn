@@ -1,0 +1,20 @@
+# 构建产物(CMake/CLion)
+cmake-build-*/
+build/
+
+# CLion 个人配置(机器相关, 不入库)
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/shelf/
+.idea/httpRequests/
+.idea/dataSources/
+.idea/dataSources.local.xml
+.idea/*.iml
+
+# 编译器/系统产物
+*.o
+*.obj
+*.exe
+*.a
+*.lib
+*.dll
