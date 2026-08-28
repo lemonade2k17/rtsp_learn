@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTSP 中继服务器 · 知识地图</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", -apple-system, "PingFang SC", sans-serif; }
+  #viewport {
+    position: fixed; inset: 0; overflow: hidden; cursor: grab;
+    background: radial-gradient(circle at 1px 1px, #d9e1ec 1px, transparent 0) 0 0/28px 28px, #f6f8fb;
+  }
+  #viewport.dragging { cursor: grabbing; }
+  /* will-change 把画布提升为独立合成层，平移/缩放不再触发整页重绘 */
+  #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+  #links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+
+  .node {
+    position: absolute; left: 0; top: 0; width: max-content; max-width: 300px;
+    padding: 7px 12px; border-radius: 9px; background: #fff; line-height: 1.4;
+    border-left: 4px solid var(--c, #999); user-select: none;
+  }
+  .node .t { font-size: 13.5px; font-weight: 600; color: #1e293b; }
+  .node .n { font-size: 11.5px; color: #64748b; margin-top: 2px; }
+
+  .node.d0 { max-width: 400px; padding: 13px 22px; background: #0f172a; border-left: none;
+             box-shadow: 0 6px 18px rgba(15,23,42,.35); }
+  .node.d0 .t { font-size: 18px; color: #fff; }
+  .node.d0 .n { color: #94a3b8; font-size: 12.5px; }
+
+  .node.d1 { background: var(--c); border-left: none; box-shadow: 0 2px 8px rgba(15,23,42,.18); }
+  .node.d1 .t { color: #fff; font-size: 15px; }
+  .node.d1 .n { color: rgba(255,255,255,.82); }
+
+  .node.d3 { border-left-width: 3px; background: #fbfdff; padding: 5px 11px; }
+  .node.d3 .t { font-size: 12.5px; font-weight: 500; color: #334155; }
+  .node.d3 .n { font-size: 11px; }
+
+  .panel { position: fixed; z-index: 10; background: #fff; border: 1px solid #e2e8f0;
+           border-radius: 12px; box-shadow: 0 4px 16px rgba(15,23,42,.10); }
+  #header { top: 16px; left: 16px; padding: 10px 16px; }
+  #header h1 { font-size: 15px; color: #0f172a; }
+  #header p  { font-size: 12px; color: #64748b; margin-top: 3px; }
+
+  #toolbar { top: 16px; right: 16px; display: flex; gap: 6px; padding: 6px; }
+  #toolbar button {
+    width: 38px; height: 36px; border: none; border-radius: 8px; background: #f1f5f9;
+    font-size: 15px; cursor: pointer; color: #334155; font-family: inherit;
+  }
+  #toolbar button:hover { background: #e2e8f0; }
+
+  #legend { bottom: 16px; left: 16px; padding: 8px 14px; font-size: 11.5px; color: #64748b; line-height: 1.9; }
+</style>
+</head>
+<body>
+
+<div id="viewport">
+  <div id="world">
+    <svg id="links"></svg>
+  </div>
+</div>
+
+<div id="header" class="panel">
+  <h1>RTSP 中继服务器 · 知识地图</h1>
+  <p>当前位置：第 2 层 → 第 3 层 ｜ 全部分支已展开 · 滚轮缩放 · 拖拽平移</p>
+</div>
+
+<div id="toolbar" class="panel">
+  <button id="btn-in"  title="放大">＋</button>
+  <button id="btn-out" title="缩小">－</button>
+  <button id="btn-fit" title="适应画布">适</button>
+</div>
+
+<div id="legend" class="panel">
+  <div>主线 = 第 0→4 层纵向依赖链，缺一层就走不通；支线 = 出现触发条件才深入</div>
+  <div>✅ 已掌握　⚠️ 需补深　★ 核心　🔀 支线　🗺️ 路线　📚 速查</div>
+</div>
+
+<script>
+"use strict";
+// ============================ 知识地图数据 ============================
+// t: 节点标题  n: 附注(第二行小字)  c: 子节点
+const DATA = {
+  t: "RTSP 中继服务器 · 知识地图",
+  n: "依赖自下而上 0→4 层 · 主线纵向贯通 · 支线按需触发",
+  c: [
+    { t: "🎯 目标全景", n: "中继 = 上游客户端 + 桥 + 下游服务器", c: [
+      { t: "上游：RTSP 客户端 · 拉流", n: "✅ 已走通（完整信令 + 收流统计）" },
+      { t: "桥：自定义 FramedSource", n: "★中继的心脏★ 把上游的帧喂给下游" },
+      { t: "下游：RTSP 服务器 · 分发", n: "⬜ 待学（第 3 层）" },
+      { t: "💡 一行洞察", n: "DummySink::afterGettingFrame1 里把帧“转手”交出去，就是中继本体" },
+    ]},
+    { t: "🧱 第0层 · C++ 与系统基础 ✅", c: [
+      { t: "回调 / RAII / 智能指针", n: "✅ 已在用" },
+      { t: "线程模型", n: "✅ 单线程事件驱动为何免锁" },
+    ]},
+    { t: "🔌 第1层 · 网络编程 ✅", c: [
+      { t: "TCP/UDP socket · 粘包/分包 · 字节序", n: "✅" },
+      { t: "select / poll / epoll 事件驱动", n: "✅ 调度器一课已覆盖" },
+    ]},
+    { t: "📡 第2层 · 流媒体协议三件套", n: "⬅ 你在这里 · 理论主线，排障全靠它", c: [
+      { t: "RTSP 信令 · RFC 2326", n: "客户端侧 ✅ · 需补：状态机全貌", c: [
+        { t: "方法：OPTIONS / DESCRIBE / SETUP / PLAY / PAUSE / TEARDOWN" },
+        { t: "关键头：CSeq · Session · Transport · Authorization" },
+      ]},
+      { t: "SDP 会话描述 · RFC 8866", n: "⚠️ 需补：徒手读懂 DESCRIBE 应答", c: [
+        { t: "m= 轨道 · rtpmap 负载类型 · fmtp 参数" },
+        { t: "a=control 决定每条轨道 SETUP 的地址" },
+      ]},
+      { t: "RTP/RTCP 媒体传输 · RFC 3550", n: "⚠️ 需补：手工解包", c: [
+        { t: "RTP 12 字节头：V/P/X/CC · M/PT · 序号 · 时间戳 · SSRC" },
+        { t: "RTCP SR/RR：质量反馈 + NTP↔RTP 时钟映射（音视频同步）" },
+      ]},
+    ]},
+    { t: "🖥️ 第3层 · RTSP 服务器端（live555）", n: "⬅ 下一站", c: [
+      { t: "RTSPServer · ServerMediaSession · ServerMediaSubsession", n: "服务端三大件" },
+      { t: "OnDemandServerMediaSubsession", n: "客户端 PLAY 时才起流 / 断流" },
+      { t: "自定义 FramedSource", n: "★心脏★：doGetNextFrame + deliverFrame" },
+      { t: "官方参考：ProxyServerMediaSession", n: "live555 自带的 RTSP 中继实现，第④步对照读" },
+    ]},
+    { t: "🧠 第4层 · 中继架构设计", n: "项目的大脑", c: [
+      { t: "技术路线：透传转发 vs 重组再发", n: "透传省 CPU · 重组可控可改" },
+      { t: "SSRC / 序号 / 时间戳", n: "沿用上游 or 自己重写" },
+      { t: "上游生命周期", n: "第一个客户端来才拉 · 最后一个走才断 · 断线重连" },
+      { t: "一路上游 → N 路下游", n: "帧的共享与复制 · 慢客户端背压" },
+      { t: "音视频同步", n: "RTCP SR 的时钟映射" },
+    ]},
+    { t: "🔀 支线 · 触发才学", n: "不在关键路径上", c: [
+      { t: "S1 鉴权 Digest · RFC 7616", n: "触发：摄像头回 401" },
+      { t: "S2 RTP over TCP（interleaved $ 帧）", n: "触发：客户端在 NAT 后 · 第③步顺手做" },
+      { t: "S3 H.264/H.265 封装 NAL/FU-A", n: "触发：花屏/转码/过滤 · 纯转发不深学" },
+      { t: "S4 组播分发", n: "触发：局域网大量观众" },
+      { t: "S5 TLS / RTSPS", n: "触发：安全需求 · 优先级最低" },
+      { t: "S6 性能：零拷贝 / 内存池 / 背压", n: "触发：客户端上量之后" },
+      { t: "S7 工具链：Wireshark / ffplay / openRTSP", n: "🚨 例外：别等触发，现在就用" },
+    ]},
+    { t: "🗺️ 推进路线", n: "每步有明确产出物", c: [
+      { t: "① 补第 2 层", n: "产出：抓包 + 手解 RTP 头 + 读懂 SDP（约半天）" },
+      { t: "② 起第 3 层", n: "产出：最小 RTSP 服务器，ffplay 播通" },
+      { t: "③ 造心脏", n: "产出：Sink→Source 桥接，1 对 1 中继原型" },
+      { t: "④ 对照官方", n: "产出：读 ProxyServerMediaSession 修正实现" },
+      { t: "⑤ 上第 4 层", n: "产出：多客户端分发 · 按需拉流 · 断线重连" },
+    ]},
+    { t: "📚 RFC 速查", c: [
+      { t: "RFC 2326 · RTSP 1.0", n: "2.0 = RFC 7826，基本不用管" },
+      { t: "RFC 8866 · SDP", n: "旧号 4566" },
+      { t: "RFC 3550 · RTP / RTCP" },
+      { t: "RFC 6184 · H.264 ／ RFC 7798 · H.265", n: "RTP 载荷封装（支线 S3）" },
+      { t: "RFC 7616 · Digest 鉴权", n: "RTSP 沿用 HTTP 的这套（支线 S1）" },
+    ]},
+  ],
+};
+
+const PALETTE = ["#2563eb", "#059669", "#d97706", "#7c3aed", "#0891b2",
+                 "#dc2626", "#65a30d", "#db2777", "#475569"];
+
+// ============================ 构建 & 测量（一次性静态布局） ============================
+const viewport = document.getElementById("viewport");
+const world    = document.getElementById("world");
+const svg      = document.getElementById("links");
+const GAPX = 48, SIB = 10, BRANCH_GAP = 22, PAD = 40;
+
+const nodes = [];
+(function index(n, depth, color) {
+  n.depth = depth; n.color = color; n.id = nodes.length;
+  nodes.push(n);
+  (n.c || []).forEach(k => index(k, depth + 1, color));
+})(DATA, 0, "#0f172a");
+DATA.c.forEach((b, i) => { b.color = PALETTE[i % PALETTE.length]; colorSub(b, b.color); });
+function colorSub(n, c) { n.color = c; (n.c || []).forEach(k => colorSub(k, c)); }
+
+nodes.forEach(n => {
+  const el = document.createElement("div");
+  el.className = "node d" + Math.min(n.depth, 3);
+  el.style.setProperty("--c", n.color);
+  const t = document.createElement("div"); t.className = "t"; t.textContent = n.t; el.appendChild(t);
+  if (n.n) { const d = document.createElement("div"); d.className = "n"; d.textContent = n.n; el.appendChild(d); }
+  world.appendChild(el);
+  n.el = el;
+  n.w = el.offsetWidth; n.h = el.offsetHeight;
+});
+
+function visH(n) {
+  const kids = n.c || [];
+  if (!kids.length) return n.h;
+  let s = 0;
+  kids.forEach((k, i) => { s += visH(k); if (i < kids.length - 1) s += (n.depth === 0 ? BRANCH_GAP : SIB); });
+  return Math.max(n.h, s);
+}
+function place(n, x, top) {
+  n.x = x;
+  const kids = n.c || [];
+  if (!kids.length) { n.y = top + n.h / 2; return; }
+  let cy = top; const ys = [];
+  kids.forEach(k => { place(k, x + n.w + GAPX, cy); cy += visH(k) + (n.depth === 0 ? BRANCH_GAP : SIB); ys.push(k.y); });
+  n.y = (ys[0] + ys[ys.length - 1]) / 2;
+}
+
+function layoutOnce() {
+  place(DATA, PAD, PAD);
+  let maxW = 0, maxH = 0, html = "";
+  nodes.forEach(n => {
+    n.el.style.transform = "translate(" + n.x + "px," + (n.y - n.h / 2) + "px)";
+    maxW = Math.max(maxW, n.x + n.w); maxH = Math.max(maxH, n.y + n.h / 2);
+  });
+  svg.setAttribute("width",  maxW + PAD);
+  svg.setAttribute("height", maxH + PAD);
+  nodes.forEach(p => (p.c || []).forEach(c => {
+    const x1 = p.x + p.w, y1 = p.y, x2 = c.x, y2 = c.y, dx = (x2 - x1) / 2;
+    const w = c.depth === 1 ? 3.5 : c.depth === 2 ? 2.4 : 1.8;
+    html += '<path d="M' + x1 + "," + y1 + " C" + (x1 + dx) + "," + y1 + " " + (x2 - dx) + "," + y2 +
+            " " + x2 + "," + y2 + '" fill="none" stroke="' + c.color + '" stroke-width="' + w + '" opacity=".7"/>';
+  }));
+  svg.innerHTML = html;
+}
+
+// ============================ 缩放 / 平移 ============================
+let scale = 1, panX = 0, panY = 0;
+function apply() { world.style.transform = "translate(" + panX + "px," + panY + "px) scale(" + scale + ")"; }
+function fit() {
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  nodes.forEach(n => {
+    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y - n.h / 2);
+    maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h / 2);
+  });
+  const vw = innerWidth, vh = innerHeight;
+  const s = Math.min((vw - 120) / (maxX - minX), (vh - 140) / (maxY - minY), 1.3);
+  scale = Math.max(s, 0.05);
+  panX = (vw - (maxX - minX) * scale) / 2 - minX * scale;
+  panY = (vh - (maxY - minY) * scale) / 2 - minY * scale;
+  apply();
+}
+function zoomAt(cx, cy, factor) {
+  const ns = Math.min(3, Math.max(0.05, scale * factor));
+  panX = cx - (cx - panX) * (ns / scale);
+  panY = cy - (cy - panY) * (ns / scale);
+  scale = ns; apply();
+}
+viewport.addEventListener("wheel", e => {
+  e.preventDefault();
+  zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0013));
+}, { passive: false });
+
+let down = null, dragging = false;
+viewport.addEventListener("pointerdown", e => {
+  down = { x: e.clientX, y: e.clientY, px: panX, py: panY };
+  dragging = false;
+  viewport.setPointerCapture(e.pointerId);
+});
+viewport.addEventListener("pointermove", e => {
+  if (!down) return;
+  const dx = e.clientX - down.x, dy = e.clientY - down.y;
+  if (!dragging && Math.hypot(dx, dy) > 5) { dragging = true; viewport.classList.add("dragging"); }
+  if (dragging) { panX = down.px + dx; panY = down.py + dy; apply(); }
+});
+viewport.addEventListener("pointerup",    () => { down = null; dragging = false; viewport.classList.remove("dragging"); });
+viewport.addEventListener("pointercancel",() => { down = null; dragging = false; viewport.classList.remove("dragging"); });
+
+// ============================ 工具栏 ============================
+document.getElementById("btn-in").onclick  = () => zoomAt(innerWidth / 2, innerHeight / 2, 1.25);
+document.getElementById("btn-out").onclick = () => zoomAt(innerWidth / 2, innerHeight / 2, 0.8);
+document.getElementById("btn-fit").onclick = fit;
+addEventListener("resize", fit);
+
+layoutOnce();
+fit();
+</script>
+</body>
+</html>

@@ -55,7 +55,9 @@ target_link_libraries(groupsock PUBLIC UsageEnvironment)
 target_link_libraries(liveMedia PUBLIC groupsock UsageEnvironment)
 
 # ---------- RTSP 程序(目前是客户端, 后续扩展为 relay) ----------
-add_executable(rtsp_relay main.cpp)
+add_executable(rtsp_relay main.cpp
+        rtsp_client.cpp
+        rtsp_client.h)
 target_link_libraries(rtsp_relay PRIVATE
     liveMedia BasicUsageEnvironment groupsock UsageEnvironment)
 
