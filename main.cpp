@@ -333,66 +333,7 @@ void continueAfterTEARDOWN(RTSPClient * /*client*/, int resultCode, char *result
     watch = 1; // 让 doEventLoop 返回
 }
 
-// int main(int argc, char **argv)
-// {
-//     // stderr 按标准默认不缓冲, 但 MinGW 运行库发现 stderr 接的是"管道"时,
-//     // 会改成全缓冲(攒满 4KB 或进程退出才刷) —— CLion(管道方式捕获输出)里
-//     // 所有日志会攒到程序结束才一次性出现。这里强制 stderr 无缓冲, 保证实时。
-//     // (必须在任何输出之前调用; 真实终端/PTY 模式下也无副作用)
-//     setvbuf(stderr, NULL, _IONBF, 0);
-//
-//     // #ifdef _WIN32
-//     //   SetConsoleOutputCP(65001); // 源文件是 UTF-8, 控制台切到 UTF-8 保证中文不乱码
-//     // #endif
-//     // 1. 创建调度器 + 运行环境(顺序固定: 先调度器, 后环境; 环境持有调度器引用)
-//     TaskScheduler *scheduler = BasicTaskScheduler::createNew();
-//     env = BasicUsageEnvironment::createNew(*scheduler);
-//
-//     // 2. 目标地址: 命令行第 1 个参数, 默认本机 MediaMTX 测试地址
-//     char const *url = argc > 1 ? argv[1] : "rtsp://127.0.0.1:554/live";
-//     *env << "RTSP 客户端启动, 目标: " << url << "\n";
-//
-//     // 3. 创建 RTSPClient。第 3 个参数 verbosity=1: 把收发的每条 RTSP 报文
-//     //    原样打印出来, 方便观察协议交互。
-//     //    (Winsock 无需手动 WSAStartup, live555 的 groupsock/inet.c 会自动初始化)
-//     rtspClient = RTSPClient::createNew(*env, url, 1, "rtsp_relay");
-//     if (rtspClient == NULL)
-//     {
-//         *env << "创建 RTSPClient 失败: " << env->getResultMsg() << "\n";
-//         env->reclaim();
-//         delete scheduler;
-//         return 1;
-//     }
-//     // 4. 发出第一条命令 OPTIONS, 然后进事件循环等应答(应答驱动着整条回调链)
-//     rtspClient->sendOptionsCommand(continueAfterOPTIONS);
-//     *env << "进入事件循环, 等待 RTSP 应答...\n";
-//     env->taskScheduler().doEventLoop(&watch);
-//
-//     // 5. 事件循环返回(watch=1), 统一清理。
-//     //    注意不在回调里 close 这些对象 —— 回调执行时还身处 live555 的调用栈中
-//     *env << "事件循环退出, 清理资源...\n";
-//     delete iter; // 迭代器是普通 C++ 对象
-//     if (session != NULL)
-//     {
-//         // 先关各轨道的 sink(DummySink 析构会打印最终统计), 再关会话
-//         MediaSubsessionIterator it(*session);
-//         MediaSubsession *sub;
-//         while ((sub = it.next()) != NULL)
-//         {
-//             if (sub->sink != NULL)
-//             {
-//                 Medium::close(sub->sink);
-//                 sub->sink = NULL;
-//             }
-//         }
-//     }
-//     Medium::close(session);    // 关会话(顺带关闭各子会话的 RTP/RTCP socket)
-//     Medium::close(rtspClient); // 关客户端(断开到服务器的 TCP 控制连接)
-//     env->reclaim();            // 清理顺序固定: 先回收环境, 再删调度器(顺序不能反)
-//     delete scheduler;
-//
-//     return 0;
-// }
+
 
 int main(int argc, char **argv)
 {
