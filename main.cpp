@@ -130,7 +130,7 @@ private:
     // 数据源关闭(服务器停止发送/会话被拆)时回调; 演示里只提示, 等停止定时器统一收尾
     static void onSourceEnd(void *clientData)
     {
-        DummySink *sink = (DummySink *) clientData;
+        DummySink* sink = (DummySink *)clientData;
         sink->stopPlaying();
         sink->envir() << "  [" << sink->fSubsession.mediumName()
                 << "] 数据流结束(源已关闭)\n";
