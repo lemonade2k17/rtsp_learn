@@ -23,6 +23,32 @@ void send_teardown(void *pv);
 
 int rtsp_client_run();
 
+class FrameSink : public MediaSink
+{
+public:
+    static FrameSink *CreateNew(UsageEnvironment &env, MediaSubsession &subsession);
+    unsigned frameCount() const;
+    unsigned byteCount() const;
+
+protected:
+    FrameSink(UsageEnvironment &env, MediaSubsession &subsession);
+    virtual ~FrameSink();
+
+    virtual boolean continuePlaying() override;
+
+private:
+    static void afterGettingFrame(void *client_data, unsigned frame_size,
+                                    unsigned numTruncatedBytes,
+                                    struct timeval /*presentationTime*/,
+                                    unsigned /*durationInMicroseconds*/);
+    void afterGettingFrame0(unsigned frame_size, unsigned numTruncatedBytes);
+    static void onSourceEnd(void *client_data);
+    unsigned fFrameCount;
+    unsigned fByteCount;
+    unsigned char *fReceiveBuffer;
+    MediaSubsession &fSubsession;
+    static unsigned const fSinkBufferSize = 2 * 1024 * 1024;
+};
 
 
 class UpstreamSession
@@ -38,7 +64,7 @@ public:
     void stop();  //发送teardown，清理媒体流
     MediaSession *mediaSession() const;
     State state() const;
-    ~UpstreamSession();//析构函数
+    ~UpstreamSession(); //析构函数
 
 private:
     UsageEnvironment *fEnv;
@@ -48,7 +74,7 @@ private:
 
     RTSPClient *fRTSPClient;
     MediaSession *fMediaSession;
-    MediaSubsession *fCurSub;
+    MediaSubsession *fCurSubsession;
     MediaSubsessionIterator *fSubIt;
     State fState;
 
@@ -75,16 +101,20 @@ private:
 class SessionRTSPClient : public RTSPClient
 {
 public:
-  static SessionRTSPClient* createNew(UsageEnvironment& env, char const* url,
-                                      int verbosity, char const* appName,
-                                      UpstreamSession* owner)
-  { return new SessionRTSPClient(env, url, verbosity, appName, owner); }
+    static SessionRTSPClient *createNew(UsageEnvironment &env, char const *url,
+                                        int verbosity, char const *appName,
+                                        UpstreamSession *owner)
+    {
+        return new SessionRTSPClient(env, url, verbosity, appName, owner);
+    }
 
-  UpstreamSession* fOwner;   // ← 就多这一个成员：存"我属于哪个 UpstreamSession"
+    UpstreamSession *fOwner; // ← 就多这一个成员：存"我属于哪个 UpstreamSession"
 
 protected:
-  SessionRTSPClient(UsageEnvironment& env, char const* url, int verbosity,
-                    char const* appName, UpstreamSession* owner)
-      : RTSPClient(env, url, verbosity, appName, 0, -1), fOwner(owner) {}
+    SessionRTSPClient(UsageEnvironment &env, char const *url, int verbosity,
+                      char const *appName, UpstreamSession *owner)
+        : RTSPClient(env, url, verbosity, appName, 0, -1), fOwner(owner)
+    {
+    }
 };
 #endif //RTSP_RELAY_RTSP_CLIENT_H
