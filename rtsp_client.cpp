@@ -7,166 +7,14 @@
 #include "RTSPClient.hh"    // RTSPClient
 #include "MediaSession.hh"  // MediaSession / MediaSubsession / 迭代器
 #include "MediaSink.hh"     // MediaSink(自定义 sink 的基类)
-#include "rtsp_client.h"
 
 const char *agent_name = "my_rtsp_client";
-
-UsageEnvironment *my_env = nullptr;                        //环境
-RTSPClient *my_rtsp_client = nullptr;                      //rtsp服务器
-EventLoopWatchVariable my_watch(0);                        //时间调度器控制信号
-MediaSession *my_media_session = nullptr;                  //整个媒体会话
-MediaSubsession *my_media_subsession = nullptr;            //单个媒体子会话
-MediaSubsessionIterator *my_media_subsession_it = nullptr; //媒体子会话迭代器
-
-void process_option_ack(RTSPClient *rtsp_client, int result_code, char *result_string)
-{
-    if (result_code < 0)
-    {
-        //未收到服务端应答
-        *my_env << "服务端未应答OPTION\r\n";
-        delete[] result_string;
-        my_watch = 1;
-        return;
-    }
-    *my_env << "服务端支持功能：" << result_string << "\r\n";
-    delete[] result_string;
-    *my_env << "OPTION环节正常\r\n";
-    rtsp_client->sendDescribeCommand(process_describe_ack);
-}
-
-void process_describe_ack(RTSPClient *rtsp_client, int result_code, char *result_string)
-{
-    if (result_code < 0)
-    {
-        //服务端未应答
-        *my_env << "服务端未应答DESCRIBE\r\n";
-        delete[] result_string;
-        my_watch = 1;
-        return;
-    }
-    *my_env << "服务端返回的SDP：\r\n" << result_string;
-    //创建媒体会话对象
-    my_media_session = MediaSession::createNew(*my_env, result_string);
-    delete[] result_string;
-    if (my_media_session == nullptr || my_media_session->hasSubsessions() == false)
-    {
-        *my_env << "SDP 里没有可用的媒体轨道, 退出\n";
-        my_watch = 1;
-        return;
-    }
-    *my_env << "DESCRIBE环节正常\r\n";
-    *my_env << "会话名：" << my_media_session->sessionName() << "\r\n";
-    my_media_subsession_it = new MediaSubsessionIterator(*my_media_session);
-    process_subsession_setup();
-}
-
-void process_subsession_setup()
-{
-    my_media_subsession = my_media_subsession_it->next();
-    if (my_media_subsession == nullptr)
-    {
-        *my_env << "所有子会话 SETUP 完成, 发送 PLAY 开始播放...\n";
-        my_rtsp_client->sendPlayCommand(*my_media_session, process_setup_ack);
-        return;
-    }
-    *my_env << "处理子会话: medium=" << my_media_subsession->mediumName()
-            << ", codec=" << my_media_subsession->codecName() << "\n";
-    if (my_media_subsession->initiate() == false)
-    {
-        *my_env << "initiate 失败: " << my_env->getResultMsg() << ", 跳过该子会话\n";
-        process_subsession_setup(); // 这一轨起不来就跳过, 继续下一轨
-        return;
-    }
-
-    *my_env << "  本地接收端口: RTP " << my_media_subsession->clientPortNum()
-            << " / RTCP " << my_media_subsession->clientPortNum() + 1 << "\n";
-    my_media_subsession->sink = FrameSink::CreateNew(*my_env, *my_media_subsession);
-
-    my_rtsp_client->sendSetupCommand(*my_media_subsession, process_play_ack);
-}
-
-void process_setup_ack(RTSPClient *rtsp_client, int result_code, char *result_string)
-{
-    if (result_code != 0)
-    {
-        *my_env << "SETUP 失败(code=" << result_code
-                << "): " << (result_string ? result_string : "") << "\n";
-
-        delete[] result_string;
-        process_subsession_setup();
-        return;
-    }
-    delete[] result_string;
-    *my_env << "SETUP 成功, 服务器将从端口 " << my_media_subsession->serverPortNum
-            << " 向我发送该轨数据\n";
-
-    process_subsession_setup(); // 继续下一轨; 没有了就发 PLAY
-}
-
-void process_play_ack(RTSPClient *rtsp_client, int result_code, char *result_string)
-{
-    if (result_code != 0)
-    {
-        *my_env << "PLAY 失败(code=" << result_code
-                << "): " << (result_string ? result_string : "") << "\n";
-        delete[] result_string;
-        my_watch = 1;
-        return;
-    }
-    delete[] result_string;
-    MediaSubsessionIterator it(*my_media_session);
-    MediaSubsession *sub;
-    while ((sub = it.next()) != nullptr)
-    {
-        if (sub->sink == nullptr) continue;
-        if (!sub->sink->startPlaying(*sub->rtpSource(), NULL, NULL))
-        {
-            *my_env << "startPlaying 失败: " << my_env->getResultMsg() << "\n";
-        }
-    }
-    my_env->taskScheduler().scheduleDelayedTask(10 * 1e6, send_teardown, nullptr);
-}
-
-void send_teardown(void *pv)
-{
-    my_rtsp_client->sendTeardownCommand(*my_media_session, process_teardown_ack);
-}
-
-void process_teardown_ack(RTSPClient *rtsp_client, int result_code, char *result_string)
-{
-    *my_env << "TEARDOWN 应答(code=" << result_code
-            << "): " << (result_string ? result_string : "") << "\n";
-    delete[] result_string;
-    my_watch = 1; // 让 doEventLoop 返回
-}
 
 int rtsp_client_run()
 {
     setvbuf(stdout, nullptr, _IOLBF, 0); // stdout 行缓冲: 每 \n 刷新
     setvbuf(stderr, nullptr, _IONBF, 0); // stderr 无缓冲: 每次 fprintf 直接写出
     const char *test_url = "rtsp://127.0.0.1:554/live";
-    TaskScheduler *my_sch = BasicTaskScheduler::createNew();
-    my_env = BasicUsageEnvironment::createNew(*my_sch);
-    my_rtsp_client = RTSPClient::createNew(*my_env, test_url, 1, agent_name);
-    if (my_rtsp_client == nullptr)
-    {
-        //创建失败
-        *my_env << "RTSP服务器创建失败";
-        my_env->reclaim();
-        delete my_sch;
-        return 1;
-    }
-
-    //发送OPTION
-    my_rtsp_client->sendOptionsCommand(process_option_ack);
-    my_env->taskScheduler().doEventLoop(&my_watch);
-
-    *my_env << "清理资源...\r\n";
-    Medium::close(my_media_session);
-    Medium::close(my_rtsp_client);
-    *my_env << "清理完成...\r\n";
-    my_env->reclaim();
-    delete my_sch;
     //正常退出
     return 0;
 }
@@ -216,10 +64,10 @@ boolean FrameSink::continuePlaying()
     return True;
 }
 
-void FrameSink::afterGettingFrame(void *client_data, unsigned frame_size, unsigned numTruncatedBytes, struct timeval, unsigned)
+void FrameSink::afterGettingFrame(void *clientData, unsigned frameSize, unsigned numTruncatedBytes, struct timeval, unsigned)
 {
-    FrameSink *sink = static_cast<FrameSink *>(client_data);
-    sink->afterGettingFrame0(frame_size, numTruncatedBytes);
+    FrameSink *sink = static_cast<FrameSink *>(clientData);
+    sink->afterGettingFrame0(frameSize, numTruncatedBytes);
 }
 
 void FrameSink::afterGettingFrame0(unsigned frame_size, unsigned numTruncatedBytes)
@@ -271,6 +119,16 @@ void UpstreamSession::start()
 
 void UpstreamSession::stop()
 {
+    if (fMediaSession == nullptr)
+    {
+        return; // 还没会话可拆
+    }
+    if ((fState != State::Playing) && (fState != State::SettingUp))
+    {
+        return;
+    }
+    fState = State::Stopping;
+    fRTSPClient->sendTeardownCommand(*fMediaSession, teardownAckTrampoline);
 }
 
 MediaSession *UpstreamSession::mediaSession() const
@@ -283,6 +141,26 @@ UpstreamSession::State UpstreamSession::state() const
     return fState;
 }
 
+UpstreamSession::~UpstreamSession()
+{
+    if (fMediaSession != nullptr)
+    {
+        // 停掉所有轨道的收流
+        MediaSubsessionIterator it(*fMediaSession);
+        MediaSubsession *sub;
+        while ((sub = it.next()) != nullptr)
+        {
+            if (sub->sink != nullptr) sub->sink->stopPlaying();
+        }
+        Medium::close(fMediaSession); // live555 对象统一用 Medium::close, 内部会 delete
+        fMediaSession = nullptr;
+    }
+    delete fSubIt;
+    fSubIt = nullptr;
+    Medium::close(fRTSPClient);
+    fRTSPClient = nullptr;
+}
+
 UpstreamSession::UpstreamSession(UsageEnvironment &env, const char *url, OnFrame onFrame, void *ctx)
     : fEnv(&env),
       fUrl(url != nullptr ? url : ""),
@@ -292,7 +170,8 @@ UpstreamSession::UpstreamSession(UsageEnvironment &env, const char *url, OnFrame
       fMediaSession(nullptr),
       fCurSubsession(nullptr),
       fSubIt(nullptr),
-      fState(State::Idle)
+      fState(State::Idle),
+      fAnySubsessionSetup(false)
 {
     fRTSPClient = SessionRTSPClient::createNew(*fEnv, fUrl.c_str(), 1, agent_name, this);
 }
@@ -304,6 +183,7 @@ void UpstreamSession::handleOptionAck(int resultCode, char *resultString)
         *fEnv << "OPTION 失败(code=" << resultCode
                 << "): " << (resultString ? resultString : "") << "\n";
         delete[] resultString;
+        fState = State::Idle;
         return;
     }
     *fEnv << "服务端支持：" << resultString;
@@ -318,12 +198,21 @@ void UpstreamSession::handleDescribeAck(int resultCode, char *resultString)
         *fEnv << "DESCRIBE 失败(code=" << resultCode
                 << "): " << (resultString ? resultString : "") << "\n";
         delete[] resultString;
+        fState = State::Idle;
         return;
     }
     *fEnv << "完整SDP:" << resultString;
     fMediaSession = MediaSession::createNew(*fEnv, resultString);
+    if (fMediaSession == nullptr || !(fMediaSession->hasSubsessions()))
+    {
+        *fEnv << "SDP解析失败\r\n";
+        delete[] resultString;
+        fState = State::Idle;
+        return;
+    }
     fSubIt = new MediaSubsessionIterator(*fMediaSession);
     delete[] resultString;
+    fState = State::SettingUp;
     setupNextSubsession();
 }
 
@@ -332,8 +221,19 @@ void UpstreamSession::setupNextSubsession()
     fCurSubsession = fSubIt->next();
     if (fCurSubsession == nullptr)
     {
+        if (!fAnySubsessionSetup)
+        {
+            //所有轨道均失败
+            *fEnv << "所有轨道均失败，放弃播放\r\n";
+            delete fSubIt;
+            fSubIt = nullptr;
+            Medium::close(fMediaSession);
+            fMediaSession = nullptr;
+            fState = State::Idle;
+            return;
+        }
         *fEnv << "所有子会话 SETUP 完成, 发送 PLAY 开始播放...\n";
-        //my_rtsp_client->sendPlayCommand(*my_media_session, process_setup_ack);
+        fRTSPClient->sendPlayCommand(*fMediaSession, playAckTrampoline);
         return;
     }
     *fEnv << "处理子会话: medium=" << fCurSubsession->mediumName()
@@ -344,12 +244,88 @@ void UpstreamSession::setupNextSubsession()
         setupNextSubsession(); // 这一轨起不来就跳过, 继续下一轨
         return;
     }
-
     *fEnv << "  本地接收端口: RTP " << fCurSubsession->clientPortNum()
             << " / RTCP " << fCurSubsession->clientPortNum() + 1 << "\n";
-    //my_media_subsession->sink = FrameSink::CreateNew(*my_env, *my_media_subsession);
+    fCurSubsession->sink = FrameSink::CreateNew(*fEnv, *fCurSubsession);
+    fRTSPClient->sendSetupCommand(*fCurSubsession, setupAckTrampoline);
+}
 
-    //my_rtsp_client->sendSetupCommand(*my_media_subsession, process_play_ack);
+void UpstreamSession::handleSetupAck(int resultCode, char *resultString)
+{
+    if (resultCode != 0)
+    {
+        *fEnv << "SETUP 失败(code=" << resultCode
+                << "): " << (resultString ? resultString : "") << "\n";
+        Medium::close(fCurSubsession->sink);   // 释放这个失败轨的 sink
+        fCurSubsession->sink = nullptr; //释放失败轨道sink后，指针清空
+        delete[] resultString;
+        setupNextSubsession();
+        return;
+    }
+    delete[] resultString;
+    fAnySubsessionSetup = true;
+    *fEnv << "SETUP 成功, 服务器将从端口 " << fCurSubsession->serverPortNum
+            << " 向我发送该轨数据\n";
+    setupNextSubsession(); // 继续下一轨; 没有了就发 PLAY
+}
+
+void UpstreamSession::handlePlayAck(int resultCode, char *resultString)
+{
+    Boolean anyStarted = False;
+    if (resultCode != 0)
+    {
+        *fEnv << "PLAY 失败(code=" << resultCode
+                << "): " << (resultString ? resultString : "") << "\n";
+        delete[] resultString;
+        stop();
+        return;
+    }
+    delete[] resultString;
+    MediaSubsessionIterator it(*fMediaSession);
+    MediaSubsession *sub;
+    while ((sub = it.next()) != nullptr)
+    {
+        if (sub->sink == nullptr)
+        {
+            continue;
+        }
+        if (sub->sink->startPlaying(*sub->rtpSource(), nullptr, nullptr))
+        {
+            anyStarted = true;
+        }
+        else
+        {
+            *fEnv << "startPlaying 失败: " << fEnv->getResultMsg() << "\n";
+        }
+    }
+    fState = State::Playing;
+    if (!anyStarted)
+    {
+        *fEnv << "所有轨道启动失败, TEARDOWN\n";
+        stop();
+    }
+    //*fEnv->taskScheduler().scheduleDelayedTask(10 * 1e6, send_teardown, nullptr);
+}
+
+void UpstreamSession::handleTeardownAck(int resultCode, char *resultString)
+{
+    *fEnv << "TEARDOWN 应答(code=" << resultCode << "): "
+            << (resultString ? resultString : "") << "\n";
+    delete[] resultString;
+
+    if (fMediaSession != nullptr)
+    {
+        MediaSubsessionIterator it(*fMediaSession);
+        MediaSubsession *sub;
+        while ((sub = it.next()) != nullptr)
+            if (sub->sink != nullptr) sub->sink->stopPlaying();
+        Medium::close(fMediaSession);
+        fMediaSession = nullptr;
+    }
+    delete fSubIt;
+    fSubIt = nullptr;
+    fState = State::Idle; // 允许再次 start()
+    // TODO(B组): 通知外部"上游已关闭"
 }
 
 void UpstreamSession::optionAckTrampoline(RTSPClient *client, int resultCode, char *resultString)
@@ -360,4 +336,19 @@ void UpstreamSession::optionAckTrampoline(RTSPClient *client, int resultCode, ch
 void UpstreamSession::describeAckTrampoline(RTSPClient *client, int resultCode, char *resultString)
 {
     static_cast<SessionRTSPClient *>(client)->fOwner->handleDescribeAck(resultCode, resultString);
+}
+
+void UpstreamSession::setupAckTrampoline(RTSPClient *client, int resultCode, char *resultString)
+{
+    static_cast<SessionRTSPClient *>(client)->fOwner->handleSetupAck(resultCode, resultString);
+}
+
+void UpstreamSession::playAckTrampoline(RTSPClient *client, int resultCode, char *resultString)
+{
+    static_cast<SessionRTSPClient *>(client)->fOwner->handlePlayAck(resultCode, resultString);
+}
+
+void UpstreamSession::teardownAckTrampoline(RTSPClient *client, int resultCode, char *resultString)
+{
+    static_cast<SessionRTSPClient *>(client)->fOwner->handleTeardownAck(resultCode, resultString);
 }

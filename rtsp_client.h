@@ -13,14 +13,6 @@ class MediaSession;
 class MediaSubsession;
 class MediaSubsessionIterator;
 
-void process_option_ack(RTSPClient *rtsp_client, int result_code, char *result_string);
-void process_describe_ack(RTSPClient *rtsp_client, int result_code, char *result_string);
-void process_subsession_setup();
-void process_setup_ack(RTSPClient *rtsp_client, int result_code, char *result_string);
-void process_play_ack(RTSPClient *rtsp_client, int result_code, char *result_string);
-void process_teardown_ack(RTSPClient *rtsp_client, int result_code, char *result_string);
-void send_teardown(void *pv);
-
 int rtsp_client_run();
 
 class FrameSink : public MediaSink
@@ -32,15 +24,15 @@ public:
 
 protected:
     FrameSink(UsageEnvironment &env, MediaSubsession &subsession);
-    virtual ~FrameSink();
+    ~FrameSink() override;
 
-    virtual boolean continuePlaying() override;
+    boolean continuePlaying() override;
 
 private:
-    static void afterGettingFrame(void *client_data, unsigned frame_size,
-                                    unsigned numTruncatedBytes,
-                                    struct timeval /*presentationTime*/,
-                                    unsigned /*durationInMicroseconds*/);
+    static void afterGettingFrame(void *clientData, unsigned frameSize,
+                                  unsigned numTruncatedBytes,
+                                  struct timeval /*presentationTime*/,
+                                  unsigned /*durationInMicroseconds*/);
     void afterGettingFrame0(unsigned frame_size, unsigned numTruncatedBytes);
     static void onSourceEnd(void *client_data);
     unsigned fFrameCount;
@@ -77,6 +69,7 @@ private:
     MediaSubsession *fCurSubsession;
     MediaSubsessionIterator *fSubIt;
     State fState;
+    bool fAnySubsessionSetup;   // 是否有至少一个轨道 SETUP 成功
 
     //构造函数
     UpstreamSession(UsageEnvironment &env, const char *url,
