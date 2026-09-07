@@ -13,17 +13,21 @@ class MediaSession;
 class MediaSubsession;
 class MediaSubsessionIterator;
 
-int rtsp_client_run();
+// 帧回调类型: 每收到一帧调用一次。ctx 是调用方自定义的上下文指针(可传 nullptr)。
+typedef void (*OnFrame)(void *ctx, const unsigned char *data, unsigned size,
+                        unsigned long long pts, const char *medium, const char *codec);
 
 class FrameSink : public MediaSink
 {
 public:
-    static FrameSink *CreateNew(UsageEnvironment &env, MediaSubsession &subsession);
+    static FrameSink *CreateNew(UsageEnvironment &env, MediaSubsession &subsession,
+                                OnFrame onFrameFunc, void *ctx);
     unsigned frameCount() const;
     unsigned byteCount() const;
 
 protected:
-    FrameSink(UsageEnvironment &env, MediaSubsession &subsession);
+    FrameSink(UsageEnvironment &env, MediaSubsession &subsession,
+              OnFrame onFrameFunc, void *ctx);
     ~FrameSink() override;
 
     boolean continuePlaying() override;
@@ -31,14 +35,17 @@ protected:
 private:
     static void afterGettingFrame(void *clientData, unsigned frameSize,
                                   unsigned numTruncatedBytes,
-                                  struct timeval /*presentationTime*/,
-                                  unsigned /*durationInMicroseconds*/);
-    void afterGettingFrame0(unsigned frame_size, unsigned numTruncatedBytes);
+                                  struct timeval presentationTime,
+                                  unsigned durationInMicroseconds);
+    void afterGettingFrame0(unsigned frame_size, unsigned numTruncatedBytes,
+                            struct timeval presentationTime);
     static void onSourceEnd(void *client_data);
     unsigned fFrameCount;
     unsigned fByteCount;
     unsigned char *fReceiveBuffer;
     MediaSubsession &fSubsession;
+    OnFrame fOnFrame;
+    void *fCtx;
     static unsigned const fSinkBufferSize = 2 * 1024 * 1024;
 };
 
@@ -48,8 +55,6 @@ class UpstreamSession
 public:
     enum class State { Idle, Describing, SettingUp, Playing, Stopping };
 
-    typedef void (*OnFrame)(void *ctx, const unsigned char *data, unsigned size,
-                            unsigned long long pts, const char *medium, const char *codec);
     static UpstreamSession *CreateNew(UsageEnvironment &env, const char *url,
                                       OnFrame onFrameFunc, void *ctx);
     void start(); //启动拉流
