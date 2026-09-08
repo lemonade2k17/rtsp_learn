@@ -57,7 +57,7 @@ void myOnFrame(void* ctx, const unsigned char* data, unsigned size,
   printf("[%s/%s] frame %u bytes, pts=%llu | 累计 %llu 帧, %llu 字节\n",
          medium, codec, size, pts, rc->frameCount, rc->totalBytes);
   // 打印这一帧的前 16 字节, 直接看 data 里的真实内容(H264 起始码/音频帧头)
-  dumpHex(data, size, 16);
+  //dumpHex(data, size, 16);
 }
 
 int main(int argc, char** argv)
