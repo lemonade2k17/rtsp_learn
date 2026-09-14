@@ -5,7 +5,7 @@
 #ifndef RTSP_RELAY_RTSP_CLIENT_H
 #define RTSP_RELAY_RTSP_CLIENT_H
 #include <string>
-
+#include "relay_queue.h"
 #include "RTSPClient.hh"
 class UsageEnvironment;
 class RTSPClient;

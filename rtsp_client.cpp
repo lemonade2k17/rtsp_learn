@@ -294,7 +294,7 @@ void UpstreamSession::handlePlayAck(int resultCode, char* resultString)
     {
       continue;
     }
-    if (sub->sink->startPlaying(*sub->rtpSource(), nullptr, nullptr))
+    if (sub->sink->startPlaying(*sub->readSource(), nullptr, nullptr))
     {
       anyStarted = true;
     }
@@ -330,7 +330,6 @@ void UpstreamSession::handleTeardownAck(int resultCode, char* resultString)
   delete fSubIt;
   fSubIt = nullptr;
   fState = State::Idle; // 允许再次 start()
-  // TODO(B组): 通知外部"上游已关闭"
 }
 
 /* 跳板函数 */
