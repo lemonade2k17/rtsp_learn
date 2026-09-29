@@ -9,7 +9,11 @@ build/
 .idea/httpRequests/
 .idea/dataSources/
 .idea/dataSources.local.xml
+.idea/atomcodeWorkspace.xml
 .idea/*.iml
+
+# AI 助手工具的本地会话记录(机器相关, 不入库)
+.workbuddy/
 
 # 编译器/系统产物
 *.o

@@ -46,7 +46,7 @@
 | `H264VideoRTPSink` 内部**两处**把 source 无条件 cast 成 `H264or5VideoStreamFramer`，源不对是 UB（其中一处会写内存） | `H264VideoRTPSink.cpp:89-96`、`H264or5VideoRTPSink.cpp:139-145` |
 | 所以 source 与 sink 之间**必须**插一层 `H264VideoStreamDiscreteFramer` | 同上 |
 | `H264VideoRTPSink` 有直接接收 `sprop-parameter-sets` 字符串的 `createNew` 重载 | `H264VideoRTPSink.hh:38-43` |
-| `MediaSubsession` 有现成的 `fmtp_spropparametersets()` | `MediaSession.hh:252` |
+| `MediaSubsession` 有通用属性访问器 `attrVal_str("sprop-parameter-sets")`；旧的 `fmtp_spropparametersets()` 已被官方标记为**弃用**（仅为向后兼容保留，内部就是转发给它） | `MediaSession.hh:240`（通用）、`:249-252`（弃用声明） |
 | `OutPacketBuffer::maxSize` 默认 **60000** 字节 | `MediaSink.cpp:113` |
 | `FramedSource` 一次只允许一个未完成请求；`handleClosure()` 用于通知流结束 | `FramedSource.cpp:41-79`、`:96-106` |
 | 上游 RTSP 用 `readSource()` 才是规范写法（部分 codec 下 `fReadSource != fRTPSource`） | `MediaSession.cpp:1259-1299` |
@@ -355,7 +355,7 @@ a=fmtp:96 packetization-mode=1;profile-level-id=42C01F;sprop-parameter-sets=<b64
 
 | 路径 | 时机 | 实现 | 说明 |
 |---|---|---|---|
-| **首选**：上游 SDP | DESCRIBE 阶段（早于 PLAY） | `sub->fmtp_spropparametersets()`（`MediaSession.hh:252`） | 最省事，前提是上游 SDP 带 `a=fmtp:...sprop-parameter-sets=` |
+| **首选**：上游 SDP | DESCRIBE 阶段（早于 PLAY） | `sub->attrVal_str("sprop-parameter-sets")`（`MediaSession.hh:240`） | 最省事，前提是上游 SDP 带 `a=fmtp:...sprop-parameter-sets=`；**不要用已弃用的 `fmtp_spropparametersets()`** |
 | **兜底**：带内抓 | 第一个 SPS/PPS 到达时 | `OnFrame` 中 `type==7/8` 存下，用 `base64Encode()`（`Base64.hh`）拼接 | 上游不带 sprop 时使用 |
 
 #### 5.5.4 保存字符串，不保存 `MediaSession` 对象
@@ -370,7 +370,7 @@ MediaSubsession* sub;
 while ((sub = it.next()) != nullptr) {
     if (strcmp(sub->mediumName(), "video") == 0 &&
         strcmp(sub->codecName(), "H264") == 0) {
-        fSprop = sub->fmtp_spropparametersets();   // 拷成 std::string
+        fSprop = sub->attrVal_str("sprop-parameter-sets");   // 拷成 std::string
         break;
     }
 }
@@ -389,10 +389,110 @@ while ((sub = it.next()) != nullptr) {
 | # | 位置 | 改动 | 原因 |
 |---|---|---|---|
 | 1 | `rtsp_client.cpp:297` | `startPlaying(*sub->rtpSource(), ...)` → `*sub->readSource()` | 部分 codec 下 `fReadSource != fRTPSource`（`MediaSession.cpp:1259-1299`） |
-| 2 | `handleDescribeAck`（`:199-222`） | 定位视频轨并把 `fmtp_spropparametersets()` 拷给外部（新增访问器或回调） | 下游 SDP 需要 SPS/PPS |
-| 3 | `TODO(B组)`（`:333`） | `handleTeardownAck` 中调用 `videoQueue->close()` | 让下游 source 走 `handleClosure()`，客户端才不会永久卡住 |
+| 2 | `handleDescribeAck`（`:199-222`） | 定位视频轨并把 `attrVal_str("sprop-parameter-sets")` 拷给外部（新增访问器或回调） | 下游 SDP 需要 SPS/PPS |
+| 3 | `handleTeardownAck`（`:315-333`） | 调用 `videoQueue->close()`（+ 广播 sprop 给 `rtsp_server` + 置 `fClosed` 闸门） | 让下游 source 走 `handleClosure()`，客户端才不会永久卡住 |
+| 4 | 新增 `RtspServerClosedFunc` 回调 | 在 `rtsp_server` 析构时置 `fClosed`，用它兜住"上游还活着、下游服务端先没了"的悬挂指针 | 见 §5.6.1 |
 
-### 5.7 `RelayServer`（新增 `relay_server.h/.cpp`）
+> ⚠️ **原 `TODO(B组)` 注释已在提交 `1da23b6` 中被删除，代码里不再有任何线索。** 三处改动中 1 已完成，2/3 待做。
+
+#### 5.6.1 改动 2/3 的详细做法：两个真实陷阱 + 一条格式澄清
+
+**改动 2：暴露 SPS/PPS + 用回调把"就绪"这件事推给下游**
+
+草案里的「新增访问器」是错的，不要做成 `const std::string& sprop() const` 这种拉取式接口。理由：
+
+`OnDemandServerMediaSubsession::sdpLines()` 第一次被调用（也就是第一个下游 DESCRIBE）就会把 SDP
+缓存进 `fSDPLines`，之后 **只有 SRTP ROC 变化才会重生成**（`OnDemandServerMediaSubsession.cpp:61-111`）。
+所以"sprop 什么时候准备好"必须由上游主动通知，而不是等下游来问。正确做法是仿照现有
+`OnFrame` / `OnError` 的模式，让 `UpstreamSession` 持有一个通用事件回调 + void* ctx：
+
+```cpp
+typedef void (*RtspSessionEvent)(void* ctx, const char* event, const char* arg);
+// event == "sprop" → arg 为 a=fmtp 的参数串；UpstreamSession 负责在首次就绪时回调一次
+```
+
+**格式澄清（原「陷阱 A」的结论有误，已按 live555 源码更正）：`attrVal_str("sprop-parameter-sets")` 返回的就是可直接使用的值，不要切逗号。**
+
+> 命名注：旧名 `fmtp_spropparametersets()` 已被 live555 标记为**弃用**（`MediaSession.hh:249-252`，
+> 仅为向后兼容保留），它内部就是转发到 `attrVal_str("sprop-parameter-sets")`。本文档一律用新名。
+
+`attrVal_str("sprop-parameter-sets")`（`MediaSession.cpp:923-928`）返回该属性的**值**；
+`parseSDPAttribute_fmtp`（`MediaSession.cpp:1149-1191`）按 `;` 切分 `name=value`，其值模式
+`%[^; \t\r\n]` **允许逗号**。因此标准（RFC 6184）形态下返回的就是：
+
+```
+<b64 SPS>,<b64 PPS>       ← 不含行首, 不含 packetization-mode, 也不含 profile-level-id
+```
+
+`profile-level-id=42C01F` 是**另一个独立参数**的值，不在 sprop 的值里。
+
+权威依据（决定性）：live555 **自己的中继实现** `ProxyServerMediaSession.cpp:696-698` 把
+`fmtp_spropparametersets()` **原样**传给 sink，零切分（该处 live555 自身用的仍是旧名，
+说明旧名与其替代者行为完全一致；下面按原文引用，不作改写）：
+
+```cpp
+newSink = H264VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic,
+                                      fClientMediaSubsession.fmtp_spropparametersets());
+```
+
+旁证：`H264VideoFileSink.hh:32-33` 注释写明该参数是 "comma-separated Base64-encoded" 串。
+
+⇒ 直接原样使用即可，**禁止 `strrchr(v, ',') + 1`**：那只会留下 PPS、丢掉 SPS，导致
+sink 内 `sps == NULL`（`H264VideoRTPSink.cpp:56-67`）→ `auxSDPLine()` 返回 NULL
+（`H264VideoRTPSink.cpp:89-97`）→ `setSDPLinesFromRTPSink` 把 NULL 换成 `""`
+（`OnDemandServerMediaSubsession.cpp:468-469`）→ **下游 SDP 里整行 `a=fmtp:` 都没有**（不崩溃, 但 VLC 黑屏）。
+
+```cpp
+const char* v = sub->attrVal_str("sprop-parameter-sets");   // 标准形态: "<b64 SPS>,<b64 PPS>"
+if (v != nullptr && v[0] != '\0') {
+    fSpropParameterSets = v;                      // 原样收下, 不要切逗号
+} else {
+    // 兼容旧式(非标准) SDP: a=fmtp:96 profile-level-id=42C01F,<b64 SPS>,<b64 PPS>
+    // 该形态下 sprop 属性不存在(返回空串), 参数集被挂在 profile-level-id 的值里
+    const char* plid  = sub->attrVal_str("profile-level-id");
+    const char* comma = (plid != nullptr) ? strchr(plid, ',') : nullptr;
+    if (comma != nullptr) fSpropParameterSets = (comma + 1);   // 取第一个逗号之后
+}
+```
+
+拿到的 `"<SPS b64>,<PPS b64>"` 正好就是 `H264VideoRTPSink::createNew(..., char const*)` 想要的形态，
+也和兜底路径（带内抓 type 7/8 后 `base64Encode` 拼接）天然一致。
+
+> 另注：`H264or5VideoStreamDiscreteFramer.cpp:139-142` 见到 type 7/8 会自动 `saveCopyOfSPS/PPS`，
+> sink 在 `H264VideoRTPSink.cpp:89-97` 会主动来取 —— 即"带内流过 framer 后自动可用"这条免费路径。
+> 但 `sdpLines()` 第一次调用即定稿（`OnDemandServerMediaSubsession.cpp:77-108`），
+> 所以它只在"第一次下游 DESCRIBE 之前已有带内 SPS/PPS 流过 framer"时成立，否则仍须上面显式注入。
+
+**陷阱 B（DESIGN §5.4 的写法编不过）：`attrVal_str()` 是 `MediaSubsession` 的公开成员，不是 `MediaSession` 的。**
+
+草案 §5.4 附近的 `MediaSubsessionIterator it(*fMediaSession);` 少了 `*`，`it.next()` 返回的是 `MediaSubsession*`。
+必须用迭代器遍历、`mediumName()=="video"` 且 `codecName()=="H264"` 的那一轨。
+
+**陷阱 C：改动 3 不是"加一行 `close()`"就完了 —— 会引入一个生命周期悬挂。**
+
+加完 `close()` 之后，`videoQueue` 会被**永久关闭**，而 `UpstreamSession` 是支持 `stop()` → `start()` 复用的
+（`UpstreamSession::start()` 里有 `if (fState != State::Idle) return;`，`handleTeardownAck` 末尾把 `fState` 置回
+`Idle`，注释写明"允许再次 start()"）。重连后 `OnFrame` 继续 `push()`，但 `UpstreamFrameSource::deliver()`
+会先看到 `fQueue.closed()` —— 已在**第一次 TEARDOWN 之后就把下游全部踢掉，再也不会恢复**。
+
+⇒ 必须给 `UpstreamSession` 加一个 `fClosed` 闸门，**只在新的一轮 `start()` 里重新打开**；与之配套，
+`VideoNalQueue` 需要一个 `reopen()`。同时：
+
+- `close()` 之后可能仍有帧要排空，**`push()` 不能在 `fClosed` 时直接丢弃**，否则 UAF
+  （`nal.data.assign(data, ...)` 里 `data` 仍指向 `FrameSink` 那个 2MB 缓冲）。`fClosed` 只用作**拒绝 reopen**
+  的闸门和"本轮已收尾"的标志；
+- 因此 `reopen()` 也不该被 `fClosed` 拦住（那会让第一次 TEARDOWN 成为终点），但要在
+  `UpstreamSession` 里挡掉"上游已收尾之后还来的 sprop/close"，避免误重开。
+
+**改动 3 的连带收益（顺手做掉）：把 sprop 广播给 `rtsp_server`。**
+
+`spropParameterSets` 到得比 sprop 早的概率很高（OBS 的 SDP 不一定带 sprop），而 `rtsp_server` 需要它才能注册。
+让 `up->start()` 带上"新的一轮"语义即可（`start()` 里先 `videoQueue->reopen()` + `fClosed=false`，
+但 sprop 需要**重新抓取**，所以不能只在 `start()` 开头清空）。推荐在 `RelayServer::registerVideoSession` 里
+对 `H264RelaySubsession` 调一次 `setSpropParameterSets()` 并**重置 `fSDPLines`**，这样重连后换了一份 SPS/PPS
+也能被下游看到（用 `protected` 的 `fSDPLines`，见 `OnDemandServerMediaSubsession.hh:135`）。
+
+### 5.7 `RelayServer`（新增 `rtsp_server.h/.cpp`）
 
 ```cpp
 class RelayServer {
@@ -431,7 +531,8 @@ up->start();
 env->taskScheduler().doEventLoop();
 ```
 
-`CMakeLists.txt`：把新增的 `relay_server.cpp`、`relay_source.cpp`（及对应头文件）加入 `add_executable`。
+`CMakeLists.txt`：把新增的 `relay_source.cpp`、`rtsp_server.cpp`（及对应头文件）加入 `add_executable`。
+`relay_queue.cpp` / `rtsp_server.cpp` 目前已在列表中，新增文件记得同步。
 
 ---
 
@@ -514,7 +615,7 @@ env->taskScheduler().doEventLoop();
 | FU-A 分片构造 | `live555/liveMedia/H264or5VideoRTPSink.cpp:202-224` |
 | `H264VideoRTPSink::createNew` 三个重载 | `live555/liveMedia/include/H264VideoRTPSink.hh:30-43` |
 | `H264VideoStreamDiscreteFramer::createNew` | `live555/liveMedia/include/H264VideoStreamDiscreteFramer.hh:33-35` |
-| `fmtp_spropparametersets()` | `live555/liveMedia/include/MediaSession.hh:252` |
+| `attrVal_str("sprop-parameter-sets")`（旧名 `fmtp_spropparametersets()` 已弃用） | `live555/liveMedia/include/MediaSession.hh:240`、弃用声明 `:249-252` |
 | `FramedSource` 契约 | `live555/liveMedia/FramedSource.cpp:41-79` |
 | `FramedSource::handleClosure` | `live555/liveMedia/FramedSource.cpp:96-106` |
 | H.264 → `H264VideoRTPSource` | `live555/liveMedia/MediaSession.cpp:1382-1386` |

@@ -17,6 +17,9 @@ class MediaSubsessionIterator;
 typedef void (*OnFrame)(void *ctx, const unsigned char *data, unsigned size,
                         unsigned long long pts, const char *medium, const char *codec);
 
+// 上游会话事件回调: event 是事件名, arg 是事件参数(可为 nullptr)
+typedef void (*RtspSessionEvent)(void* ctx, const char* event, const char* arg);
+
 class FrameSink : public MediaSink
 {
 public:
@@ -56,7 +59,7 @@ public:
     enum class State { Idle, Describing, SettingUp, Playing, Stopping };
 
     static UpstreamSession *CreateNew(UsageEnvironment &env, const char *url,
-                                      OnFrame onFrameFunc, void *ctx);
+                                      OnFrame onFrameFunc, void *ctx, RtspSessionEvent onEvent = nullptr, void *eventCtx = nullptr);
     void start(); //启动拉流
     void stop();  //发送teardown，清理媒体流
     MediaSession *mediaSession() const;
@@ -76,9 +79,14 @@ private:
     State fState;
     bool fAnySubsessionSetup;   // 是否有至少一个轨道 SETUP 成功
 
+    RtspSessionEvent fOnEvent;      // 事件回调
+    void*            fEventCtx;     // 回调上下文
+    bool             fSpropReported; // 幂等标志: 只报一次
+    std::string      fSprop;        // 视频轨参数集 "<b64 SPS>,<b64 PPS>"
+
     //构造函数
-    UpstreamSession(UsageEnvironment &env, const char *url,
-                    OnFrame onFrame, void *ctx);
+    UpstreamSession(UsageEnvironment &env, const char *url, OnFrame onFrame, void *ctx,
+                                 RtspSessionEvent onEvent, void *eventCtx);
 
     // ── ack 处理器: 普通私有成员函数 ──
     void handleOptionAck(int resultCode, char *resultString);

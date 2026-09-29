@@ -20,6 +20,7 @@ VideoNal VideoNal::fromH264(const unsigned char* nal, std::size_t size,
   // 判定必须用 b0 & 0x1F, 不能整字节比对 0x65:
   // 高 3 位是 F + NRI, 会随参考帧状态变化。
   // size > 0 是短路保护, 避免空数据时去读 nal[0]。
+  // 判断是不是关键帧
   v.isKeyFrame = (size > 0) && ((nal[0] & 0x1F) == 5);
   return v;
 }
